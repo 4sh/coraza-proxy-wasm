@@ -51,7 +51,7 @@ spec:
     matchLabels:
       app: istio-ingressgateway
       istio: ingressgateway
-  url: oci://ghcr.io/corazawaf/coraza-proxy-wasm
+  url: oci://ghcr.io/4sh/coraza-proxy-wasm
 ```
 
 The `selector` needs to match labels attached to the pods of the ingress gateway.
@@ -87,7 +87,7 @@ spec:
   selector:
     matchLabels:
       app: my-app
-  url: oci://ghcr.io/corazawaf/coraza-proxy-wasm
+  url: oci://ghcr.io/4sh/coraza-proxy-wasm
 ```
 
 The `selector` needs to match labels attached to the pods of the namespace where filtering is desired.

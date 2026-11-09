@@ -16,8 +16,11 @@ on:
 permissions: {}
 
 env:
-  GO_VERSION: '1.23'
-  TINYGO_VERSION: 0.34.0
+  GO_VERSION: '1.25'
+  # TinyGo 0.39 is the first release supporting Go 1.25 (needed by coraza v3.8.x) that boots under Envoy.
+  TINYGO_VERSION: 0.39.0
+  # -buildmode=wasi-legacy post-processes the module with wasm-opt.
+  BINARYEN_VERSION: version_133
   # Run e2e tests against latest two releases and latest dev
   ENVOY_IMAGES: >
     envoyproxy/envoy:v1.33-latest
@@ -60,14 +63,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install binaryen (wasm-opt)
+        run: |
+          gh release download ${BINARYEN_VERSION} -p "binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz" -D ~ -R github.com/WebAssembly/binaryen
+          tar -xf ~/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz -C $HOME
+          echo "$HOME/binaryen-${BINARYEN_VERSION}/bin" >> $GITHUB_PATH
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Cache TinyGo build
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v3
         with:
           path: |
             ~/.cache/tinygo
-          key: ${{ runner.os }}-tinygo-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-tinygo-${{ env.TINYGO_VERSION }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-tinygo-
+            ${{ runner.os }}-tinygo-${{ env.TINYGO_VERSION }}-
 
       - name: Run code checks
         run: go run mage.go lint

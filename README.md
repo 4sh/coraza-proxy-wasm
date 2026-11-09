@@ -1,5 +1,21 @@
 # Coraza Proxy WASM
 
+> [!NOTE]
+> This repository is an **unofficial fork** of [corazawaf/coraza-proxy-wasm](https://github.com/corazawaf/coraza-proxy-wasm), maintained by [4SH](https://github.com/4sh). It is not affiliated with, endorsed by or supported by the OWASP Foundation or the OWASP Coraza project. "OWASP" and "Coraza" are names of the OWASP Foundation and its projects, used here only to describe the software this fork derives from. Please report issues with this fork here, not upstream.
+
+### Changes from upstream
+
+The upstream code is licensed under the Apache License 2.0 (see [`LICENSE`](LICENSE)); this fork modifies it as follows:
+
+- Toolchain moved to Go 1.25 and TinyGo 0.39 (`-gc=boehm`, `-buildmode=wasi-legacy`, registration in `init()`), based on upstream draft PR [#330](https://github.com/corazawaf/coraza-proxy-wasm/pull/330).
+- `@rx` and `@pm` backed by the Rust `regex` and `aho-corasick` crates instead of RE2, through vendored forks of the wasilibs libraries in `third_party/` (see each `TIGERA-FORK.md`). The prebuilt archives are rebuilt from source in CI (`third_party/build-archives.sh`, workflow `wasm-archives.yaml`).
+- Coraza upgraded to v3.8.1, vendored in `third_party/coraza` with upstream commit 7a1b42ad (#1544) reverted to keep wasm memory bounded (see [`third_party/coraza/4SH-FORK.md`](third_party/coraza/4SH-FORK.md)).
+- TinyGo-safe JSON audit log formatter (`internal/auditlog/json_safe.go`), adapted from [scott-wong/coraza-proxy-wasm](https://github.com/scott-wong/coraza-proxy-wasm).
+
+The built filter bundles third-party software under other licenses, listed with their notices in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+## About
+
 Web Application Firewall WASM filter built on top of [Coraza](https://github.com/corazawaf/coraza) and implementing the [proxy-wasm ABI](https://github.com/proxy-wasm/spec). It can be loaded directly from Envoy or also used as an Istio plugin.
 
 Mind that a WAF is not a plug-and-play security solution. It requires a configuration and tuning tailored to the environment and traffic the WAF is meant to protect to be effective. For production usage, it is strongly recommended to be fully aware of the deployed configurations (See [@recommended-conf](./wasmplugin/rules/coraza.conf-recommended.conf) and [@crs-setup-conf](./wasmplugin/rules/crs-setup.conf.example)) and to perform a tuning phase of the rule set used. For more information on tuning the OWASP Core Rule Set (CRS), please refer to the [False Positives and Tuning](https://coreruleset.org/docs/concepts/false_positives_tuning/) guide.
@@ -31,10 +47,11 @@ Targets:
 
 Building the filter requires:
 
-- [Go](https://go.dev/doc/install)
-- [TinyGo](https://tinygo.org/getting-started/install/) `0.34.0`. Note: higher versions are currently not supported.
+- [Go](https://go.dev/doc/install) `1.25`. TinyGo 0.39 refuses newer Go releases.
+- [TinyGo](https://tinygo.org/getting-started/install/) `0.39.0`. Note: other versions are currently not supported (0.41 fails at module start).
+- [binaryen](https://github.com/WebAssembly/binaryen) (`wasm-opt`), required by TinyGo's `wasi-legacy` build mode.
 
-Up to date required versions can be found looking at [`minGoVersion` and `tinygoMinorVersion` variables](./magefiles/magefile.go).
+Up to date required versions can be found looking at [`minGoVersion` and `minTinygoVersion` variables](./magefiles/magefile.go).
 
 ### Building the filter
 

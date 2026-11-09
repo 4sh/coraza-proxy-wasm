@@ -1,0 +1,39 @@
+name: Wasm archives
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "third_party/**"
+      - ".github/workflows/wasm-archives.yaml"
+  pull_request:
+    paths:
+      - "third_party/**"
+      - ".github/workflows/wasm-archives.yaml"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  rebuild:
+    name: Rebuild libcre2.a and libinjection.a from source
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Rebuild archives
+        run: ./third_party/build-archives.sh
+
+      # Uploaded before the check so a mismatching rebuild can be inspected or committed.
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4
+        with:
+          name: wasm-archives
+          path: |
+            third_party/go-re2/internal/wasm/libcre2.a
+            third_party/go-libinjection/wasm/libinjection.a
+
+      - name: Committed archives must match the rebuild
+        run: git diff --exit-code --stat -- third_party
