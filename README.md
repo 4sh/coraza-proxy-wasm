@@ -9,7 +9,7 @@ The upstream code is licensed under the Apache License 2.0 (see [`LICENSE`](LICE
 
 - Toolchain moved to Go 1.25 and TinyGo 0.39 (`-gc=boehm`, `-buildmode=wasi-legacy`, registration in `init()`), based on upstream draft PR [#330](https://github.com/corazawaf/coraza-proxy-wasm/pull/330).
 - `@rx` and `@pm` backed by the Rust `regex` and `aho-corasick` crates instead of RE2, through vendored forks of the wasilibs libraries in `third_party/` (see each `TIGERA-FORK.md`). The prebuilt archives are rebuilt from source in CI (`third_party/build-archives.sh`, workflow `wasm-archives.yaml`).
-- Coraza upgraded to v3.8.1, vendored in `third_party/coraza` with upstream commit 7a1b42ad (#1544) reverted to keep wasm memory bounded (see [`third_party/coraza/4SH-FORK.md`](third_party/coraza/4SH-FORK.md)).
+- Coraza upgraded to v3.8.1, vendored in `third_party/coraza` with two later upstream changes backported: commit a66ffcfe (#1682), which keeps the transformation cache, and so wasm memory, bounded, and PR [#1750](https://github.com/corazawaf/coraza/pull/1750), which expands `msg`/`logdata` only when a rule matches (see [`third_party/coraza/4SH-FORK.md`](third_party/coraza/4SH-FORK.md)).
 - TinyGo-safe JSON audit log formatter (`internal/auditlog/json_safe.go`), adapted from [scott-wong/coraza-proxy-wasm](https://github.com/scott-wong/coraza-proxy-wasm).
 
 The built filter bundles third-party software under other licenses, listed with their notices in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

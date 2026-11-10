@@ -1,5 +1,5 @@
 // Copyright 2022 Juan Pablo Tosso and the OWASP Coraza contributors
-// Modified by 4SH (2026): reverted upstream commit 7a1b42ad (#1544); see third_party/coraza/4SH-FORK.md.
+// Modified by 4SH (2026): backported upstream commit a66ffcfe (#1682) and PR #1750; see third_party/coraza/4SH-FORK.md.
 // SPDX-License-Identifier: Apache-2.0
 
 package corazawaf
@@ -98,6 +98,11 @@ type Rule struct {
 	transformations []ruleTransformationParams
 
 	transformationsID int
+	// transformationPrefixIDs holds the chain ID at each step of the transformation chain.
+	// transformationPrefixIDs[i] is the ID representing transformations [0..i].
+	// This enables prefix-based caching: rules sharing a common transformation prefix
+	// can reuse cached intermediate results instead of recomputing from scratch.
+	transformationPrefixIDs []int
 
 	// Slice of initialized actions to be evaluated during
 	// the rule evaluation process
@@ -164,7 +169,7 @@ const chainLevelZero = 0
 // Evaluate will evaluate the current rule for the indicated transaction
 // If the operator matches, actions will be evaluated, and it will return
 // the matched variables, keys and values (MatchData)
-func (r *Rule) Evaluate(phase types.RulePhase, tx plugintypes.TransactionState, cache map[transformationKey]*transformationValue) {
+func (r *Rule) Evaluate(phase types.RulePhase, tx plugintypes.TransactionState, cache map[transformationKey]transformationValue) {
 	// collectiveMatchedValues lives across recursive calls of doEvaluate
 	var collectiveMatchedValues []types.MatchData
 
@@ -183,7 +188,7 @@ func (r *Rule) Evaluate(phase types.RulePhase, tx plugintypes.TransactionState, 
 
 const noID = 0
 
-func (r *Rule) doEvaluate(logger debuglog.Logger, phase types.RulePhase, tx *Transaction, collectiveMatchedValues *[]types.MatchData, chainLevel int, cache map[transformationKey]*transformationValue) []types.MatchData {
+func (r *Rule) doEvaluate(logger debuglog.Logger, phase types.RulePhase, tx *Transaction, collectiveMatchedValues *[]types.MatchData, chainLevel int, cache map[transformationKey]transformationValue) []types.MatchData {
 	tx.Capture = r.Capture
 
 	if multiphaseEvaluation {
@@ -197,16 +202,7 @@ func (r *Rule) doEvaluate(logger debuglog.Logger, phase types.RulePhase, tx *Tra
 
 	ruleCol := tx.variables.rule
 	ruleCol.SetIndex("id", 0, r.LogID())
-	if r.Msg != nil {
-		// Expand the message using the current TX variables so that %{rule.msg} in setvar actions
-		// returns the fully expanded message, matching ModSecurity behavior.
-		ruleCol.SetIndex("msg", 0, r.Msg.Expand(tx))
-	}
 	ruleCol.SetIndex("rev", 0, r.Rev_)
-	if r.LogData != nil {
-		// Same expansion for logdata, matching ModSecurity behavior for %{rule.logdata}.
-		ruleCol.SetIndex("logdata", 0, r.LogData.Expand(tx))
-	}
 	ruleCol.SetIndex("severity", 0, r.Severity_.String())
 	// SecMark and SecAction uses nil operator
 	if r.operator == nil {
@@ -254,15 +250,20 @@ func (r *Rule) doEvaluate(logger debuglog.Logger, phase types.RulePhase, tx *Tra
 			}
 			vLog.Debug().Msg("Expanding arguments for rule")
 
+			useCache := transformationCacheable(v)
 			args := make([]string, 1)
 			var errs []error
 			var argsLen int
-			for i, arg := range values {
-				if r.MultiMatch {
+			for _, arg := range values {
+				switch {
+				case r.MultiMatch:
 					args, errs = r.transformMultiMatchArg(arg)
 					argsLen = len(args)
-				} else {
-					args[0], errs = r.transformArg(arg, i, cache)
+				case useCache:
+					args[0], errs = r.transformArg(arg, cache)
+					argsLen = 1
+				default:
+					args[0], errs = r.executeTransformations(arg.Value())
 					argsLen = 1
 				}
 				if len(errs) > 0 {
@@ -322,6 +323,7 @@ func (r *Rule) doEvaluate(logger debuglog.Logger, phase types.RulePhase, tx *Tra
 							// part of the last rule of the chain if the evaluated chained variables already matched. This avoids incrementing the CRS anomaly score multiple
 							// time from the same variables chain.
 							tx.matchVariable(mr)
+							r.expandRuleCollection(tx)
 							for _, a := range r.actions {
 								if a.Function.Type() == plugintypes.ActionTypeNondisruptive {
 									vLog.Debug().Str("action", a.Name).Msg("Evaluating action")
@@ -357,11 +359,13 @@ func (r *Rule) doEvaluate(logger debuglog.Logger, phase types.RulePhase, tx *Tra
 		for nr := r.Chain; nr != nil; {
 			chainLevel++
 
-			var nrLogger debuglog.Logger
-			if nr.ID_ == noID {
-				nrLogger = logger.With(debuglog.Str("chain_rule_ref", fmt.Sprintf("%s#L%d", nr.File_, nr.Line_)))
-			} else {
-				nrLogger = logger.With(debuglog.Int("chain_rule_id", nr.ID_))
+			nrLogger := logger
+			if logger.Debug().IsEnabled() {
+				if nr.ID_ == noID {
+					nrLogger = logger.With(debuglog.Str("chain_rule_ref", fmt.Sprintf("%s#L%d", nr.File_, nr.Line_)))
+				} else {
+					nrLogger = logger.With(debuglog.Int("chain_rule_id", nr.ID_))
+				}
 			}
 
 			matchedChainValues := nr.doEvaluate(nrLogger, phase, tx, collectiveMatchedValues, chainLevel, cache)
@@ -416,35 +420,97 @@ func (r *Rule) transformMultiMatchArg(arg types.MatchData) ([]string, []error) {
 	return r.executeTransformationsMultimatch(arg.Value())
 }
 
-func (r *Rule) transformArg(arg types.MatchData, argIdx int, cache map[transformationKey]*transformationValue) (string, []error) {
-	switch {
-	case len(r.transformations) == 0:
-		return arg.Value(), nil
-	case arg.Variable().Name() == "TX":
-		// no cache for TX
-		arg, errs := r.executeTransformations(arg.Value())
-		return arg, errs
-	default:
-		// NOTE: See comment on transformationKey struct to understand this hacky code
-		argKey := arg.Key()
-		argKeyPtr := unsafe.StringData(argKey)
+// transformationCacheable reports whether the values of rv are worth sending through
+// the transformation cache. This is about usefulness, not safety: a value that is a
+// fresh string every time is still keyed correctly (see transformationKey), but its
+// entries are never read again. Counts (&VARIABLE) and ARGS_COMBINED_SIZE are a new
+// string on every lookup, and setvar keeps replacing TX values mid-phase.
+// MATCHED_VAR, MATCHED_VAR_NAME, MATCHED_VARS_NAMES and RULE also change during a
+// phase, but rules rarely transform them, so they are left in.
+func transformationCacheable(rv ruleVariableParams) bool {
+	if rv.Count {
+		return false
+	}
+	switch rv.Variable {
+	case variables.TX, variables.ArgsCombinedSize:
+		return false
+	}
+	return true
+}
+
+// transformArg runs the rule's transformations on arg through the per-phase cache.
+// Callers skip it for variables that are not transformationCacheable.
+func (r *Rule) transformArg(arg types.MatchData, cache map[transformationKey]transformationValue) (string, []error) {
+	argValue := arg.Value()
+	if len(r.transformations) == 0 {
+		return argValue, nil
+	}
+
+	// NOTE: See comment on transformationKey struct to understand this hacky code
+	argValuePtr := unsafe.StringData(argValue)
+	argValueLen := len(argValue)
+
+	// Search from longest prefix (full chain) backwards for a cache hit.
+	// Best case: full chain cached → single map lookup, done.
+	// Typical case: shared prefix cached → start computing from there.
+	startIdx := 0
+	value := argValue
+	var errs []error
+
+	for i := len(r.transformationPrefixIDs) - 1; i >= 0; i-- {
 		key := transformationKey{
-			argKey:            argKeyPtr,
-			argIndex:          argIdx,
-			argVariable:       arg.Variable(),
-			transformationsID: r.transformationsID,
+			argValue:          argValuePtr,
+			argValueLen:       argValueLen,
+			transformationsID: r.transformationPrefixIDs[i],
 		}
 		if cached, ok := cache[key]; ok {
-			return cached.arg, cached.errs
-		} else {
-			ars, es := r.executeTransformations(arg.Value())
-			errs := es
-			cache[key] = &transformationValue{
-				arg:  ars,
-				errs: es,
+			if i == len(r.transformationPrefixIDs)-1 {
+				// Full chain cached — nothing more to compute
+				return cached.arg, cached.errs
 			}
-			return ars, errs
+			value = cached.arg
+			// Cap the slice so that the appends below copy it instead of writing
+			// into the backing array it shares with other cache entries.
+			errs = cached.errs[:len(cached.errs):len(cached.errs)]
+			startIdx = i + 1
+			break
 		}
+	}
+
+	// Execute remaining transformations, caching each intermediate step
+	// so later rules sharing a prefix can reuse our work.
+	for i := startIdx; i < len(r.transformations); i++ {
+		v, _, err := r.transformations[i].Function(value)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			value = v
+		}
+
+		key := transformationKey{
+			argValue:          argValuePtr,
+			argValueLen:       argValueLen,
+			transformationsID: r.transformationPrefixIDs[i],
+		}
+		cache[key] = transformationValue{arg: value, errs: errs}
+	}
+
+	return value, errs
+}
+
+// expandRuleCollection publishes the expanded msg and logdata of the rule in
+// the RULE collection so that %{rule.msg} and %{rule.logdata} in the rule's
+// own actions see the expanded value. It runs once the rule has matched and
+// the MATCHED_* variables are set, right before the actions: expanding them for
+// every evaluated rule was the single largest allocation of a CRS request
+// (ModSecurity v2 exposes the raw strings and v3 expands on read, neither
+// pre-expands).
+func (r *Rule) expandRuleCollection(tx *Transaction) {
+	if r.Msg != nil {
+		tx.variables.rule.SetIndex("msg", 0, r.Msg.Expand(tx))
+	}
+	if r.LogData != nil {
+		tx.variables.rule.SetIndex("logdata", 0, r.LogData.Expand(tx))
 	}
 }
 
@@ -467,6 +533,7 @@ func (r *Rule) matchVariable(tx *Transaction, m *corazarules.MatchData) {
 	// SecActions (r.operator == nil) are always executed
 	if !multiphaseEvaluation || r.operator == nil {
 		tx.matchVariable(m)
+		r.expandRuleCollection(tx)
 		for _, a := range r.actions {
 			if a.Function.Type() == plugintypes.ActionTypeNondisruptive {
 				tx.DebugLogger().Debug().Str("action", a.Name).Msg("Evaluating action")
@@ -652,6 +719,7 @@ func (r *Rule) AddTransformation(name string, t plugintypes.Transformation) erro
 	}
 	r.transformations = append(r.transformations, ruleTransformationParams{Function: t})
 	r.transformationsID = transformationID(r.transformationsID, name)
+	r.transformationPrefixIDs = append(r.transformationPrefixIDs, r.transformationsID)
 	return nil
 }
 
@@ -659,6 +727,8 @@ func (r *Rule) AddTransformation(name string, t plugintypes.Transformation) erro
 // it is mostly used by the "none" transformation
 func (r *Rule) ClearTransformations() {
 	r.transformations = []ruleTransformationParams{}
+	r.transformationsID = 0
+	r.transformationPrefixIDs = nil
 }
 
 // SetOperator sets the operator of the rule

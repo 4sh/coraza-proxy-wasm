@@ -1,5 +1,5 @@
 // Copyright 2022 Juan Pablo Tosso and the OWASP Coraza contributors
-// Modified by 4SH (2026): reverted upstream commit 7a1b42ad (#1544); see third_party/coraza/4SH-FORK.md.
+// Modified by 4SH (2026): backported upstream commit a66ffcfe (#1682) and PR #1750; see third_party/coraza/4SH-FORK.md.
 // SPDX-License-Identifier: Apache-2.0
 
 package corazawaf
@@ -230,7 +230,7 @@ func (w *WAF) newTransaction(opts Options) *Transaction {
 	tx.Skip = 0
 	tx.AllowType = 0
 	tx.Capture = false
-	tx.stopWatches = map[types.RulePhase]int64{}
+	tx.stopWatches = [len(tx.stopWatches)]int64{}
 	tx.WAF = w
 	tx.debugLogger = w.Logger.With(debuglog.Str("tx_id", tx.id))
 	tx.Timestamp = time.Now().UnixNano()
@@ -259,7 +259,7 @@ func (w *WAF) newTransaction(opts Options) *Transaction {
 		})
 
 		tx.variables = *NewTransactionVariables()
-		tx.transformationCache = map[transformationKey]*transformationValue{}
+		tx.transformationCache = map[transformationKey]transformationValue{}
 	}
 
 	// set capture variables
