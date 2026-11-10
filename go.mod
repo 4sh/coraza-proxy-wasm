@@ -33,7 +33,7 @@ require (
 	github.com/magefile/mage v1.17.0 // indirect
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/tetratelabs/wazero v1.7.3 // indirect
+	github.com/tetratelabs/wazero v1.12.0 // indirect; test-only (proxytest). Keep >= v1.9.0: Go 1.24+ memmove clobbers DX on amd64 (wazero #2378)
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/valllabh/ocsf-schema-golang v1.0.3 // indirect
@@ -42,6 +42,7 @@ require (
 	github.com/wasilibs/go-re2 v1.6.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
