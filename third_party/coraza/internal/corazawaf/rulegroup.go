@@ -1,4 +1,5 @@
 // Copyright 2022 Juan Pablo Tosso and the OWASP Coraza contributors
+// Modified by 4SH (2026): backported upstream commit a66ffcfe (#1682) and PR #1750; see third_party/coraza/4SH-FORK.md.
 // SPDX-License-Identifier: Apache-2.0
 
 package corazawaf
@@ -10,7 +11,6 @@ import (
 	"github.com/corazawaf/coraza/v3/internal/corazatypes"
 	utils "github.com/corazawaf/coraza/v3/internal/strings"
 	"github.com/corazawaf/coraza/v3/types"
-	"github.com/corazawaf/coraza/v3/types/variables"
 )
 
 // RuleGroup is a collection of rules
@@ -290,14 +290,19 @@ func NewRuleGroup() RuleGroup {
 type transformationKey struct {
 	// TODO(anuraaga): This is a big hack to support performance on TinyGo. TinyGo
 	// cannot efficiently compute a hashcode for a struct if it has embedded non-fixed
-	// size fields, for example string as we'd prefer to use here. A pointer is usable,
-	// and it works for us since we know that the arg key string is populated once per
-	// transaction phase and we would never have different string pointers with the same
-	// content, or more problematically same pointer for different content, as the strings
-	// will be alive throughout the phase.
-	argKey            *byte
-	argIndex          int
-	argVariable       variables.RuleVariable
+	// size fields, for example string as we'd prefer to use here. A pointer is usable:
+	// the pointer stored here keeps the value's memory alive, so the same pointer and
+	// length can never come back with different content. The opposite case, different
+	// pointers with the same content, only costs a duplicate entry, and is rare because
+	// collections hold their values throughout the phase.
+	//
+	// The identity is the value itself (data pointer + length), not the argument's key
+	// and position: collections backed by a map return FindAll() results in Go map
+	// iteration order, so an argument's position is not stable from one rule to the
+	// next within a phase. Variables that get a fresh string on every lookup would only
+	// leave entries behind, see transformationCacheable.
+	argValue          *byte
+	argValueLen       int
 	transformationsID int
 }
 

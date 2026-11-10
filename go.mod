@@ -10,7 +10,7 @@ require (
 	github.com/tidwall/gjson v1.18.0
 )
 
-// coraza v3.8.1 with upstream #1544 reverted (wasm heap growth under TinyGo), see third_party/coraza/4SH-FORK.md.
+// coraza v3.8.1 with upstream a66ffcfe (#1682, bounded wasm memory) and PR #1750 backported, see third_party/coraza/4SH-FORK.md.
 replace github.com/corazawaf/coraza/v3 => ./third_party/coraza
 
 // wasilibs operator backends re-pointed at local forks (PR #330), see each fork's TIGERA-FORK.md.

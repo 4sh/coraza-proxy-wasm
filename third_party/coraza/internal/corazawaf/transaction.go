@@ -1,5 +1,5 @@
 // Copyright 2024 Juan Pablo Tosso and the OWASP Coraza contributors
-// Modified by 4SH (2026): reverted upstream commit 7a1b42ad (#1544); see third_party/coraza/4SH-FORK.md.
+// Modified by 4SH (2026): backported upstream commit a66ffcfe (#1682) and PR #1750; see third_party/coraza/4SH-FORK.md.
 // SPDX-License-Identifier: Apache-2.0
 
 package corazawaf
@@ -120,8 +120,8 @@ type Transaction struct {
 	// We must reuse it in the future
 	Capture bool
 
-	// Contains duration in useconds per phase
-	stopWatches map[types.RulePhase]int64
+	// Contains duration in nanoseconds per phase, indexed by phase number
+	stopWatches [types.PhaseLogging + 1]int64
 
 	// Contains a WAF instance for the current transaction
 	WAF *WAF
@@ -137,7 +137,7 @@ type Transaction struct {
 
 	variables TransactionVariables
 
-	transformationCache map[transformationKey]*transformationValue
+	transformationCache map[transformationKey]transformationValue
 }
 
 func (tx *Transaction) ID() string {
@@ -676,6 +676,10 @@ func (tx *Transaction) GetField(rv ruleVariableParams) []types.MatchData {
 		}
 	default:
 		matches = col.FindAll()
+	}
+
+	if len(rv.Exceptions) == 0 && !rv.Count {
+		return matches
 	}
 
 	// in the most common scenario filteredMatches length will be
@@ -1734,6 +1738,11 @@ func (tx *Transaction) Close() error {
 	}
 
 	tx.variables.reset()
+	// The entries of the last evaluated phase point to values the collections have
+	// just released, and would keep them alive while the transaction sits in the pool.
+	for k := range tx.transformationCache {
+		delete(tx.transformationCache, k)
+	}
 	if err := tx.requestBodyBuffer.Reset(); err != nil {
 		errs = append(errs, fmt.Errorf("reseting request body buffer: %v", err))
 	}
